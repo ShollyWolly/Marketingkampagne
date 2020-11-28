@@ -1,0 +1,1601 @@
+---
+title: "KIDM - Marketing - Datensatz"
+author: "Alexander Hilberer"
+output: html_document
+---
+
+
+## Klassifikationsverfahren im DataMining
+
+Dies sind die Packete, welche für dieses Projekt verwendet wurden.
+
+```{r echo=T, results='hide',error=FALSE, warning=FALSE,message=FALSE}
+library(gridExtra)
+library(Hmisc)
+library(PRROC)
+library(MLmetrics)
+library(ROCR)
+library(ggplot2)
+library(e1071) 
+library(caret)
+library(mice)
+library(randomForest)
+library(corrplot)
+library(dplyr)
+library(VIM)
+library(glmnet)
+library(DMwR)
+library(tidymodels)
+library(tidyverse)
+
+```
+
+## Einlesen der Datensätze
+
+Im folgenden wird zunächst nur der "marketing_dataset.csv", abgespeichert unter der Variable "df" Verwendet.
+
+```{r, }
+df = read.csv("C:/Users/Alexander/OneDrive - hochschule-trier.de/uni/4. Semester/KIDM/Projekt/Marketing/marketing_dataset.csv",sep="#",dec=",")[,2:17]
+
+df_Dont_use = read.csv("C:/Users/Alexander/OneDrive - hochschule-trier.de/uni/4. Semester/KIDM/Projekt/Marketing/marketing_dataset_to_predict.csv",sep="§",dec=",",fileEncoding = "UTF-8")[,2:17]
+
+```
+
+Nachdem der Datensatz erfolgreich eigelesen wurde verschaffen wir uns einen überblick über die Daten:
+
+```{r,}
+summary(df)
+str(df)
+```
+Wie wir sehen können, enthalten einige Variablen einen leerstring, diese Daten sind "NA-Werte", welche noch nicht dem Datentyp NA zugeordnet sind. Dies wird im folgenden behoben.
+
+Desweiteren sehen wir, das einige Variablen, welche Numeric sind, bei default als Factor formatiert sind. Dies wird auch behoben, des weiteren wird sicher gestellt, dass keine negative Werte in diesen vorkommen können. (Ausnahmen der Varibalen "pdays", da diese einen Wert -1 eins enthalten kann, diese Variable wird eine Sonderbehandlung weiter unten erhalten.) 
+
+```{r,}
+df[df==""] = NA #Leerstrings mit NA ersetzen
+df$marital = factor(df$marital) #entfernen des leeren levels
+df$housing = factor(df$housing) #entfernen des leeren levels
+
+df$age = as.integer(df$age) #Umformatierung in Numeric
+df$age = abs(df$age) #Negatives Alter kann nicht existieren
+
+df$balance = as.integer(df$balance) #Umformatierung in Numeric
+df$balance = abs(df$balance) #Negatives verfügbares einkommen ist unrealistisch
+
+df$campaign = as.integer(df$campaign) #Umformatierung in Numeric
+df$campaign = abs(df$campaign) #Man keinen einen Kunden nicht negativ oft kontaktieren.
+
+df$pdays = as.numeric(df$pdays) #Umformatierung in Numeric
+
+df$previous = as.integer(df$previous) #Umformatierung in Numeric
+df$previous = abs(df$previous) #Man keinen einen Kunden nicht negativ oft kontaktieren.
+
+df$day = as.factor(df$day) #Ein Monat kann nur bis zu 31 Tage haben, demzufolge ist ein Factor am Sinnfollsten.
+
+df$y = factor(df$y, levels = c("yes","no"))
+summary(df)
+str(df)
+```
+
+## Grafische Analyse: Kategoriale Variablen (Factor)
+
+Nachdem wir nun die Datentypen richtig zugeordnet haben, sowie eine erste kleine Analyse durchgeführt haben können wir in eine tiefere analyse des Datensatzes übergehen.
+
+### y-Variable (Zielvariable)
+
+```{r, echo=F}
+Y_Plot =  ggplot(data = df, aes(x = factor(y), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'y', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Y_Plot)
+```
+
+Wie man sieht ist die Zielvariable sehr ungleich Verteilt und muss dementsprechend beim Training des Models entsprechend verteilt werden.
+
+### Job-Variable
+
+```{r, echo=F}
+Job_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(job), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'job', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Job_Plot)
+
+#Y = No
+Job_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(job), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'job', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Job_Plot)
+
+#Gesamt
+Job_Plot =  ggplot(data = df, aes(x = factor(job), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'job', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Job_Plot)
+
+```
+
+Wir können sehen, dass wir sowohl werte als "NA" als auch als "unknown" klassifiziert haben. Die Aussagekraft der beiden Variablen jedoch ist die selbe, desshalb werden wir im folgenden die "unknown" Variable NA setzen.
+
+```{r, echo=F}
+df$job[df$job=="unknown"] = NA #Alle unknown NA setzen
+df$job = factor(df$job) #Leeres level entfernen
+
+Job_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(job), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'job', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Job_Plot)
+
+#Y = No
+Job_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(job), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'job', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Job_Plot)
+
+#Gesamt
+Job_Plot =  ggplot(data = df, aes(x = factor(job), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'job', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Job_Plot)
+```
+
+Der NA-Anteil ist verschwindend gering deshalb sollte eine Imputation von Werten später kein Problem darstellen.
+
+### Marital-Variable
+```{r, echo=F}
+Marital_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(marital), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Marital', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Marital_Plot)
+
+#Y = No
+Marital_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(marital), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Marital', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Marital_Plot)
+
+#Gesamt
+Marital_Plot =  ggplot(data = df, aes(x = factor(marital), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Marital', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Marital_Plot)
+```
+
+Die Variable benötigt keine Wertere bearbeitung, der NA-Anteil ist desweiteren auch sehr gering.
+Es scheint dass, wenn man single ist, neigt es dazu das die Werbeaktion wenniger erflogreich ist.
+
+### Education-Variable
+```{r, echo=F}
+Education_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(education), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Education', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Education_Plot)
+
+#Y = No
+Education_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(education), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Education', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Education_Plot)
+
+#Gesamt
+Education_Plot =  ggplot(data = df, aes(x = factor(education), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Education', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Education_Plot)
+```
+
+Wie wir sehen, gibt es hier auch noch eine "unknown" Varibale, wir setzen diese NA.
+
+```{r, echo=F}
+df$education[df$education=="unknown"] = NA
+df$education = factor(df$education)
+
+Education_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(education), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Education', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Education_Plot)
+
+#Y = No
+Education_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(education), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Education', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Education_Plot)
+
+#Gesamt
+Education_Plot =  ggplot(data = df, aes(x = factor(education), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Education', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Education_Plot)
+```
+
+Der NA-Anteil ist auch hier relativ gering und sollte später kein Problem für die Imputation darstellen.
+
+### Default-Variable
+```{r, echo=F}
+Default_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(default), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Default', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Default_Plot)
+
+#Y = No
+Default_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(default), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Default', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Default_Plot)
+
+#Gesamt
+Default_Plot =  ggplot(data = df, aes(x = factor(default), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Default', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Default_Plot)
+```
+
+Viele Kunden haben keinen Kredit, die Vertielung nach der Zielvariablen hier ist jedoch sehr ähnlich.
+
+### Housing-Variable
+```{r, echo=F}
+Housing_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(housing), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Housing', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Housing_Plot)
+
+#Y = No
+Housing_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(housing), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Housing', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Housing_Plot)
+
+#Gesamt
+Housing_Plot =  ggplot(data = df, aes(x = factor(housing), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Housing', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Housing_Plot)
+```
+
+Sollte die Person bereits ein Hausdarlehnen haben, so ist es deutlich wahrscheinlicher, dass sie kein weiteres Darlehenen aufnehmen wird.
+Desweiteren ist der NA-Anteil gering (unter 1%).
+
+### Loan-Variable
+```{r, echo=F}
+Loan_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(loan), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Loan', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Loan_Plot)
+
+#Y = No
+Loan_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(loan), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Loan', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Loan_Plot)
+
+#Gesamt
+Loan_Plot =  ggplot(data = df, aes(x = factor(loan), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Loan', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Loan_Plot)
+```
+
+Sollte die Person bereits ein Persönliches Darlehnen haben, so ist es Wahrscheinlicher, dass sie kein weiteres Darlehnen aufnehmen wird.
+
+### Contact-Variable
+```{r, echo=F}
+Contact_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(contact), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Contact', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Contact_Plot)
+
+#Y = No
+Contact_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(contact), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Contact', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Contact_Plot)
+
+#Gesamt
+Contact_Plot =  ggplot(data = df, aes(x = factor(contact), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Contact', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Contact_Plot)
+```
+
+Wir haben hier wieder eine Weitere "unknown" Varibale. Diese hat einen sehr großen Anteil, jedoch ist dieser nicht übermäßig groß und wird NA-gesetzt.
+
+```{r, echo=F}
+df$contact[df$contact=="unknown"] = NA
+df$contact = factor(df$contact)
+
+Contact_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(contact), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Contact', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Contact_Plot)
+
+#Y = No
+Contact_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(contact), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Contact', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Contact_Plot)
+
+#Gesamt
+Contact_Plot =  ggplot(data = df, aes(x = factor(contact), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Contact', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Contact_Plot)
+```
+
+Der NA Anteil ist nun sehr groß.
+
+### Month-Variable
+```{r, echo=F}
+Month_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(month), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Month', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Month_Plot)
+
+#Y = No
+Month_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(month), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Month', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Month_Plot)
+
+#Gesamt
+Month_Plot =  ggplot(data = df, aes(x = factor(month), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Month', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Month_Plot)
+```
+
+Der Monat Mai scheint sehr beliebt zu sein um zu Werben.
+
+### Day-Variable
+```{r, echo=F}
+Day_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(day), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Day', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Day_Plot)
+
+#Y = No
+Day_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(day), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Day', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Day_Plot)
+
+#Gesamt
+Day_Plot =  ggplot(data = df, aes(x = factor(day), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Day', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Day_Plot)
+```
+
+Der Tag scheint keinen großen einfuss zu haben.
+Jedoch laut unseres Datensatzes hat ein Monat 32 Tage.
+Analyse der 32. Tage.
+
+```{r, echo=F}
+filter(df, df$day == 32)
+```
+Scheint nichts weiter ungeöhnlich an den Tagen, deshalb wird der 32. Tag, dem 1. Tag des Montats zugeordnet.
+
+```{r, echo=F}
+df$day[df$day==32] = 1 
+df$day = factor(df$day)
+
+Day_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(day), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Day', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Day_Plot)
+
+#Y = No
+Day_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(day), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Day', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Day_Plot)
+
+#Gesamt
+Day_Plot =  ggplot(data = df, aes(x = factor(day), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Day', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Day_Plot)
+```
+
+Die Variable scheint nun so weit in Ordnung zu sein.
+
+### Pdays-Variable
+```{r, echo=F,warning=F}
+c("NA-Anteil:",sum(is.na(df$pdays))/length(df$pdays))
+c("-1-Anteil:",nrow(filter(df, df$pdays < 0))/length(df$pdays))
+
+```
+
+Es ist nicht sinnvoll, -1 = Niemals; und 0 = gestern in relation zu einander stehen zu lassen. Demzufolge habe ich mittels Binning die Variable von Metrisch auf eine Kategoriale Variable mit 5 leveln abgeändert.
+Dazu genutzt habe ich die Interquatielsabstände (ohne einfluss aller "-1" Werte) 25, 50, 75 genutzt.
+< 25% = previosly
+< 50% = relatively long
+< 75% = long ago
+alles andere = very long ago
+
+```{r,echo=F,warning=F}
+describe(select(df, --1))
+
+df$pdays[df$pdays==-1] = "Never Contacted"
+df$pdays[df$pdays<33] = "previosly"
+df$pdays[df$pdays<39] = "relatively long"
+df$pdays[df$pdays<48] = "long ago"
+df$pdays[df$pdays<=99] = "very long ago"
+df$pdays = as.factor(df$pdays)
+
+Pday_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(pdays), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Pday', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Pday_Plot)
+
+#Y = No
+Pday_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(pdays), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Pday', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Pday_Plot)
+
+#Gesamt
+Pday_Plot =  ggplot(data = df, aes(x = factor(pdays), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Pday', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Pday_Plot)
+
+```
+
+81% der Kunden wurden vorher noch nicht kontaktiert, was diese Variable sehr Merkwürdig erscheinen lässt.
+Der NA-Anteil hingegen ist nicht sehr hoch. 
+Man kann jedoch davon ausgehen, dass ein Kunde der relativ lange nicht Kontaktiert wurde eher einen Kredit aufnehmen wird, als ein Kunde, der vor kurzem erst Kontatkiert wurde.
+
+### Poutcome-Variable
+```{r, echo=F}
+Poutcome_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(poutcome), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Poutcome', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Poutcome_Plot)
+
+#Y = No
+Poutcome_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(poutcome), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Poutcome', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Poutcome_Plot)
+
+#Gesamt
+Poutcome_Plot =  ggplot(data = df, aes(x = factor(poutcome), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Poutcome', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Poutcome_Plot)
+```
+
+Die unknown Variable ist sehr hoch, doch befor wir diese NA setzen sollten wir uns die anderen p-Variablen im Verhältnis anschauen da wir daraus evt. informationen entziehen können, den sowoh "other" als auch "unknown" können fehlende Werte bei dieser eigentlich Binaren ausprägung.
+
+```{r, echo=F, results=FALSE}
+
+filter(df, df$poutcome == "other")
+filter(df, df$poutcome == "unknown")
+
+```
+
+Dadurch, das jede "Prevois Outcome" Variable mit "unknown" auch keine vorherige kontaktanfrage aus der "pdays" Variable gegenübersteht, sowie das es noch keinen kontakt mit diesem Kunkden vor der Campanie gab (Previos Variable), kann man davon ausgehen, dass Unknown dafür steht, das es vorher noch keine Campain mit diesem Kunden gab.
+
+Demzufolge bin ich davon ausgegangen, das "other" für fehlende Werte steht.
+```{r, echo=F}
+df$poutcome = as.character(df$poutcome)
+df$poutcome[df$poutcome=="unknown"] = "No Campain"
+df$poutcome[df$poutcome=="other"] = NA
+df$poutcome = as.factor(df$poutcome)
+
+Poutcome_Plot =  ggplot(data = filter(df, df$y == "yes"), aes(x = factor(poutcome), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = Yes")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Poutcome', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Poutcome_Plot)
+
+#Y = No
+Poutcome_Plot =  ggplot(data = filter(df, df$y == "no"), aes(x = factor(poutcome), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Verteilung bei y = No")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Poutcome', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Poutcome_Plot)
+
+#Gesamt
+Poutcome_Plot =  ggplot(data = df, aes(x = factor(poutcome), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Poutcome', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+plot(Poutcome_Plot)
+```
+
+Der NA-Anteil liegt nun bei ca. 4% was nicht besonders Segnifikant ist.
+
+## Grafische Analyse: Metrische Variablen (Integer)
+
+### Age-Variable
+```{r, echo=F, warning=F}
+Age_Plot = ggplot(df, aes(factor(y),age)) + geom_boxplot()
+plot(Age_Plot)
+c("NA-Anteil:",sum(is.na(df$age))/length(df$age))
+```
+
+Relativ großer NA Anteil
+Da Kunden mit einem Alter von unter 18 und über 90 unrealistisch sind, entfernen wir diese Werte
+
+```{r, echo=T, message=FALSE}
+df = anti_join(df,data.frame(filter(df, df$age < 18)))
+df = anti_join(df,data.frame(filter(df, df$age > 90)))
+```
+
+```{r, echo=F, warning=F}
+Age_Plot = ggplot(df, aes(factor(y),age)) + geom_boxplot()
+plot(Age_Plot)
+c("NA-Anteil:",sum(is.na(df$age))/length(df$age))
+Age_Check = data.frame(df[is.na(df$age),])
+```
+Dies hat einen relativ großen Anteil der Ausreißer enfernt. Jedoch sind nach wie vor ca. 10 der Variablen NA (relativ hoher Anteil)
+
+### Balance-Variable
+```{r,echo=F,warning=F}
+Balance_Plot = ggplot(df, aes(factor(y),balance)) + geom_boxplot()
+plot(Balance_Plot)
+c("NA-Anteil:",sum(is.na(df$balance))/length(df$balance))
+```
+Ziemlich viele leute haben ein sehr Geringes einkommen angegeben.
+Kaum Werte sind NA, sollte bei der Imputation kein Problem darstellen.
+
+### Campain-Variable
+```{r, echo=F,warning=F}
+Campain_Plot = ggplot(df, aes(factor(y),campaign)) + geom_boxplot()
+plot(Campain_Plot)
+c("NA-Anteil:",sum(is.na(df$campaign))/length(df$campaign))
+```
+Kaum Werte sind NA, sollte bei der Imputation kein Problem darstellen.
+
+
+
+### Previos-Variable
+```{r, echo=F,warning=F}
+Previos_Plot = ggplot(df, aes(factor(y),previous)) + geom_boxplot()
+plot(Previos_Plot)
+c("NA-Anteil:",sum(is.na(df$previous))/length(df$previous))
+```
+Enthält einen sehr großen Ausreißer
+
+#### Analyse des Ausreißers:
+Er zeigt nichts weiter ungewöhnliches auf
+```{r, echo=F,warning=F}
+filter(df,df$previous==max(df$previous)) #analyse des Ausreißers
+```
+Entfernen des Ausreißers, da einzelne Ausreißer nur das Modell verzerren.
+
+```{r, echo=F,warning=F}
+df = subset(df, df$previous!=275)
+Previos_Plot = ggplot(df, aes(factor(y),previous)) + geom_boxplot()
+plot(Previos_Plot)
+c("NA-Anteil:",sum(is.na(df$previous))/length(df$previous))
+
+
+
+ggplot(filter(df,df$previous !=0), aes(factor(y),previous)) + geom_boxplot() + ggtitle("Plot ohne 0 Variable")
+```
+
+Keine NA-Werte, die Variable zeigt nicht auf, was ungewöhnlich ist, selbst wenn ich alle 0 werte rausfiltere. Das einzige was erkennbar ist, ist dass die Meisten kunden nicht all zu oft Kontaktiert worden sind.
+
+### Korrelation zwischen Metrischen Variablen
+
+```{r, echo=F}
+
+Matrix = cbind("Age" = df$age, "Balance" = df$balance, "Campain" =  df$campaign, "Previos" =  df$previous)
+Korrelation = rcorr(as.matrix(Matrix))
+corrplot(Korrelation$r)
+
+str(df_bereinigt)
+summary(df_bereinigt)
+
+```
+
+Alle Metrischen Merkmale haben keine segnifikante Korrelation zu einander.
+
+## Imputation fehlender Werte.
+
+Hierzu werde ich den "rf"-Algorithmus aus dem Mice package verwenden.
+
+Zunächst einen überblick über die fehlenden Werte verschaffen. 
+```{r, warning=F,echo=F}
+aggr(df, numbers=TRUE, prop=TRUE)
+
+
+
+```
+
+Contact hat wie erwartet den höchsten Anteil an fehlenden Werten.
+
+Zur Imputation verwende ich ein RandomForest verfahren. Desweiteren setzte ich einen seed(12345) um das Ergebnis reproduzierbar zu machen.
+
+```{r, echo=T, results='hide',error=FALSE, warning=FALSE,message=FALSE}
+
+set.seed(12345)
+InterationCounter = 1
+Test = mice(df[,-16],meth = "rf", m=InterationCounter)
+
+```
+
+
+
+## Verteilung des Datensatzes in Test und Trainingsdaten:
+Zur verteilung der Daten Werde ich ein Stratified Sampling verfahren verwenden, da die Zielvariable sehr ungleich verteilt ist.
+
+```{r, echo=T, error=FALSE, warning=FALSE, message=FALSE}
+df_bereinigt = cbind(complete(Test,1),"y" = df$y)
+df_good = df_bereinigt[- grep("no", df_bereinigt$y),]
+
+df_bad = df_bereinigt[-grep("yes",df_bereinigt$y),]
+
+df_train_good = sample_frac(df_good,0.7)
+df_train_bad = sample_frac(df_bad,0.7)
+
+df_train = full_join(df_train_good,df_train_bad)
+df_test = anti_join(df_bereinigt, df_train)
+```
+
+```{r, echo=F}
+Verteilung_Train_Sampling = table(df_train$y)
+writeLines("Verteilung Traindaten") 
+prop.table(Verteilung_Train_Sampling)
+writeLines("")
+writeLines("")
+
+Verteilung_Test_Sampling = table(df_test$y)
+writeLines("Verteilung Testdaten")
+print(prop.table(Verteilung_Test_Sampling))
+writeLines("")
+writeLines("")
+
+#Allgemeine Verteilung
+Allgeimeine_Verteilung = table(df_bereinigt$y)
+writeLines("Verteilung des Ganzen Datensatzes")
+print(prop.table(Allgeimeine_Verteilung))
+```
+
+### Analyse des Datensatzes vor und nach der Imputation:
+
+```{r, echo=F}
+
+Job_Plot_new =  ggplot(data = df_bereinigt, aes(x = factor(job), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung nach Imputation")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Job', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+densityplot(Test, ~job)
+
+grid.arrange(Job_Plot_new, Job_Plot, nrow = 1)
+```
+
+```{r, echo=F}
+
+Marital_Plot_new =  ggplot(data = df_bereinigt, aes(x = factor(marital), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung nach Imputation")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Marital', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+densityplot(Test, ~marital)
+
+grid.arrange(Marital_Plot_new, Marital_Plot, nrow = 1)
+
+```
+
+```{r, echo=F}
+
+Education_Plot_new =  ggplot(data = df_bereinigt, aes(x = factor(education), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung nach Imputation")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Education', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+densityplot(Test, ~education)
+
+grid.arrange(Education_Plot_new, Education_Plot, nrow = 1)
+
+```
+
+```{r, echo=F}
+
+Housing_Plot_new =  ggplot(data = df_bereinigt, aes(x = factor(housing), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung nach Imputation")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Housing', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+densityplot(Test, ~housing)
+
+grid.arrange(Housing_Plot_new, Housing_Plot, nrow = 1)
+
+```
+
+```{r, echo=F}
+
+Contact_Plot_new =  ggplot(data = df_bereinigt, aes(x = factor(contact), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung nach Imputation")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Contact', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+densityplot(Test, ~contact)
+
+grid.arrange(Contact_Plot_new, Contact_Plot, nrow = 1)
+
+```
+
+```{r, echo=F}
+
+Pdays_Plot_new =  ggplot(data = df_bereinigt, aes(x = factor(pdays), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung nach Imputation")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Pdays', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+densityplot(Test, ~pdays)
+
+grid.arrange(Pdays_Plot_new, Pday_Plot, nrow = 1)
+
+```
+
+```{r, echo=F}
+
+Poutcome_Plot_new =  ggplot(data = df_bereinigt, aes(x = factor(poutcome), 
+                            y = prop.table(stat(count)), 
+                            label = scales::percent(prop.table(stat(count))))) +
+            ggtitle("Gesamtverteilung nach Imputation")+
+            geom_bar(position = "dodge") + 
+            geom_text(stat = 'count',
+                position = position_dodge(.9), 
+                vjust = -0.5, 
+                size = 3) + 
+            scale_y_continuous(labels = scales::percent) + 
+            labs(x = 'Poutcome', y = '% - Häufigkeit')+
+            theme(axis.text.x = element_text(angle = 45,hjust = 1))
+
+densityplot(Test, ~poutcome)
+
+grid.arrange(Poutcome_Plot_new, Poutcome_Plot, nrow = 1)
+
+```
+
+```{r, echo=F}
+
+print("Age-Variable")
+summary(df$age)
+summary(df_bereinigt$age)
+densityplot(Test, ~age)
+print("Balance-Variable")
+summary(df$balance)
+summary(df_bereinigt$balance)
+densityplot(Test, ~balance)
+print("Campain-Variable")
+summary(df$campaign)
+summary(df_bereinigt$campaign)
+densityplot(Test, ~campaign)
+
+```
+
+### Überprüfung der Korrelation zu einander
+
+```{r, echo=F}
+
+Matrix = cbind("Age" = df_bereinigt$age, "Balance" = df_bereinigt$balance, "Campain" =  df_bereinigt$campaign, "Previos" =  df_bereinigt$previous)
+Korrelation = rcorr(as.matrix(Matrix))
+corrplot(Korrelation$r)
+
+
+```
+
+
+
+Wie man hier sieht, ist die Verteilung nach der Zielvariablen nahezu geleich.
+
+## Entwicklung eines RandonForest Models:
+Da wir nun einen geeigneten Trainingsdatensatz, so wie einen Testdatensatz haben können wir ein Model entwickeln und dieses Tunen.
+
+Zum Tuning nutze ich die F1 - Variable, welche das harmonische mittel zwishcen Precision und Recall darstellt.
+
+```{r, echo=T, error=FALSE, warning=FALSE,message=FALSE, results=FALSE}
+set.seed(123456)
+f1 <- function (data, lev = NULL, model = NULL) {
+  precision <- caret::posPredValue(data$pred, data$obs)
+  names(precision) = "Precision"
+  print(precision)
+  recall  <- caret::sensitivity(data$pred, data$obs)
+  names(recall) = "Recall"
+  print(recall)
+  f1_val <- (2 * precision * recall) / (precision + recall)
+  names(f1_val) <- c("F1")
+  print(f1_val)
+}
+
+
+
+trainctrl = trainControl(method = "cv", number = 10, verboseIter = FALSE, allowParallel = TRUE, classProbs = TRUE, savePredictions = "all")
+
+
+myGrid = expand.grid(mtry = c(.mtry = seq(from = 2, to = 15, by = 1)))
+
+RF_Caret_Model_Train = train(y~.,
+                       data = df_train,
+                       method = "rf",
+                       metric = "F1",
+                       tuneGrid = myGrid,
+                       trControl = trainControl(summaryFunction = f1,
+                                                classProbs = TRUE, method = "cv", number = 10, verboseIter = TRUE, search = "grid"))
+
+
+
+myGrid = RF_Caret_Model_Train$bestTune
+
+RF_Caret_Final = train(y~.,
+                       data = df_train,
+                       method = "rf",
+                       trControl = trainctrl,
+                       tuneGrid = myGrid,
+                       seeds = RF_Caret_Model_Train$control$seeds)
+
+```
+
+
+Als nächstes Optimieren wir den Cutoff
+
+```{r, echo=T, error=FALSE, warning=FALSE,message=FALSE}
+
+Cutoff_RF <- thresholder(RF_Caret_Final, 
+                              threshold = seq(.005, 1, by = 0.005), 
+                              final = TRUE)
+
+Full_Frame_RF = Cutoff_RF[which.max(Cutoff_RF$F1),]
+Full_Frame_RF$prob_threshold
+
+```
+
+Nun, da das Modell Fertig getuned wurde können wir dieses evaluieren.
+
+Nun wenden wir das Modell auf unseren erstellten Testdatensatz an und Evaluieren das Modell.
+
+### Confusionsmatrix
+
+```{r, warning=F}
+
+ModelTest = predict(RF_Caret_Final, df_test, type = "prob")
+threshold <- Full_Frame_RF$prob_threshold
+pred      <- factor( ifelse(ModelTest["yes"] > threshold, "yes", "no") )
+ 
+confusionMatrix(reference = df_test$y,  data = pred, mode = "prec_recall", positive="yes")
+
+```
+
+Ich habe mich hier entschlossen den Cutoff in anbetracht zu Precision und Recall zu optimieren, je nach anwendungsfall ist es evt. besser diesen mehr nach Recall oder Precision zu richten. Da ich hier keine Opportunitätskosten angestzt habe gehe ich von diesem Ergebnis aus.
+
+Unser Modell sieht ziemlich gut aus, wenn man davon ausgeht, dass hohe oportunitätskosten herrschen.
+
+Nun Plotten wir unser Ergebnis:
+
+```{r, echo=F}
+BEZUGSDATEN = df_test
+
+BEZUGSDATEN$Ausfallwahrscheinlichkeit <- ModelTest[, which(colnames(ModelTest) == "yes")]
+
+DIAGNOSEDATEN <- prediction(BEZUGSDATEN$Ausfallwahrscheinlichkeit,
+                            BEZUGSDATEN$y == "yes")
+
+ROC.KURVE <- performance(DIAGNOSEDATEN, measure = "tpr", x.measure = "fpr")
+AUC_ROC <- performance(DIAGNOSEDATEN, measure = "auc")@y.values[[1]]
+plot(ROC.KURVE, xlab = "False Positive Rate", ylab = "True Positive Rate", main = "ROC-Kurve")
+abline(a = 0, b = 1, col = "red")
+text(0.8, 0.2, paste("AUC:", toString(round(AUC_ROC, digits = 3)), sep = " "))
+
+#PRC.KURVE <- performance(DIAGNOSEDATEN, measure = "prec", x.measure = "rec")
+#plot(PRC.KURVE, xlab = "Recall", ylab = "Precision", main = "PRC-Kurve")
+AUC_PRC = PRAUC(BEZUGSDATEN$Ausfallwahrscheinlichkeit, BEZUGSDATEN$y == "yes")
+PRcurve(BEZUGSDATEN$Ausfallwahrscheinlichkeit, BEZUGSDATEN$y == "yes")
+text(x=0.2, y=0.2, label = paste("AUC:", round(AUC_PRC, digits = 3)))
+
+
+
+
+Prec_Kurve = performance(DIAGNOSEDATEN, measure = "prec")
+Recall_Kurve = performance(DIAGNOSEDATEN, measure = "rec")
+plot(Prec_Kurve,col = "blue", ylab = "Recall/Precision", main = "Threshold-Recall-Prescision-Curve")
+plot(Recall_Kurve,col = "red", add=TRUE)
+legend(0.6, 0.4, legend = c("Recall", "Precision"), col = c("red", "blue"),lwd=1:2)
+```
+
+### Entwicklung eines Logistischen Regression Models:
+
+Zunächst generieren wir eine normale Logistische Regression auf den Daten.
+
+Dannach werden wir die Daten Mittels einer Elastischen Regression (verbindung zwischen Lasso (L1) und Ridge Regession (L2)) regulieren und darauf eine Logistische Regression anwenden.
+
+#### Normale Logistische Regression:
+
+```{r, echo=T, error=FALSE, warning=FALSE,message=FALSE, results=FALSE}
+#Normal Logistic Regression
+set.seed(123456)
+Log_Reg_Normal = train(y~.,
+                data = df_train,
+                method = "glm",
+                family = "binomial",
+                metric = "F1",
+                trControl = trainControl(method = "cv", number = 10,summaryFunction = f1, classProbs = TRUE, savePredictions = "all"), #, 
+                )
+
+
+```
+
+Anwendung einer Elastischen Regression
+
+```{r, echo=T, error=FALSE, warning=FALSE,message=FALSE, results= FALSE}
+#Regulized Logstic Regresion
+set.seed(123456)
+Log_Reg_Regulized = train(y~.,
+                data = df_train,
+                method = "glmnet",
+                family = "binomial",
+                metric = "F1",
+                trControl = trainControl(method = "cv", number = 10, summaryFunction = f1, classProbs = TRUE, savePredictions = "all"), #
+                )
+
+
+```
+
+Evaluieren der Beiden Modelle
+
+```{r, echo=F}
+LGR_Predict = predict(Log_Reg_Normal, df_test, type = "raw")
+EGR_Predict = predict(Log_Reg_Regulized, df_test, type = "raw")
+print("Logistische Regression:")
+confusionMatrix(reference = df_test$y,  data = LGR_Predict, mode = "prec_recall", positive="yes")
+print("Elastische Regression:")
+confusionMatrix(reference = df_test$y,  data = EGR_Predict, mode = "prec_recall", positive="yes")
+```
+
+Wie wir sehen können, ist die Logistische Regression besser als die Elastische, jedoch nicht viel unterschied. Was keine große verwunderung ist, da alpha und lambda beide auf einem sehr geringen Wert gehalten wurden und somit kaum einfluss auf die Funktion hatte.
+
+
+### Cutoff anpassen
+
+```{r, echo=T, error=FALSE, warning=FALSE,message=FALSE}
+
+Cutoff_LRG <- thresholder(Log_Reg_Normal, 
+                              threshold = seq(.005, 1, by = 0.005), 
+                              final = TRUE)
+
+Full_Frame_Reg = Cutoff_LRG[which.max(Cutoff_LRG$F1),]
+Full_Frame_Reg$prob_threshold
+
+```
+
+Modell auf Testdaten anwenden und evaluieren.
+
+```{r, warning=F}
+
+LGR_Predict = predict(Log_Reg_Regulized, df_test, type = "prob")
+threshold <- Full_Frame_Reg$prob_threshold
+pred      <- factor( ifelse(LGR_Predict["yes"] > threshold, "yes", "no") )
+ 
+confusionMatrix(reference = df_test$y,  data = pred, mode = "prec_recall", positive="yes")
+```
+
+Auch hier habe ich mich wieder dazu entschlossen den Cutoff nach Precision und Recall in gleicher Geweichtung zu optimieren.
+
+### Plotten der Kurven der Elastischen Regression
+
+```{r, echo=F}
+BEZUGSDATEN = df_test
+
+BEZUGSDATEN$Ausfallwahrscheinlichkeit = LGR_Predict$yes
+#head(BEZUGSDATEN)
+
+DIAGNOSEDATEN <- prediction(BEZUGSDATEN$Ausfallwahrscheinlichkeit,
+                            BEZUGSDATEN$y == "yes")
+
+ROC.KURVE <- performance(DIAGNOSEDATEN, measure = "tpr", x.measure = "fpr")
+AUC_ROC <- performance(DIAGNOSEDATEN, measure = "auc")@y.values[[1]]
+plot(ROC.KURVE, xlab = "False Positive Rate", ylab = "True Positive Rate", main = "ROC-Kurve")
+abline(a = 0, b = 1, col = "red")
+text(0.8, 0.2, paste("AUC:", toString(round(AUC_ROC, digits = 3)), sep = " "))
+
+AUC_PRC = PRAUC(BEZUGSDATEN$Ausfallwahrscheinlichkeit, BEZUGSDATEN$y == "yes")
+PRcurve(BEZUGSDATEN$Ausfallwahrscheinlichkeit, BEZUGSDATEN$y == "yes")
+text(x=0.2, y=0.2, label = paste("AUC:", round(AUC_PRC, digits = 3)))
+
+
+Prec_Kurve = performance(DIAGNOSEDATEN, measure = "prec")
+Recall_Kurve = performance(DIAGNOSEDATEN, measure = "rec")
+plot(Prec_Kurve,col = "blue", ylab = "Recall/Precision", main = "Threshold-Recall-Prescision-Curve")
+plot(Recall_Kurve,col = "red", add=TRUE)
+legend(0.6, 0.4, legend = c("Recall", "Precision"), col = c("red", "blue"),lwd=1:2)
+
+
+```
+
+### Fazit
+Da der RandomForest einen PR-AUC von 0,401 hat und die Logistische Regression einen von 0.382, ist der Randomforst leicht besser als die Logistische Regression.  
+
+### Bereitstellung des zu Prognostizierenden Datensatzes
+
+Im anschluss habe ich alle umformungsschritte des ersten Datensatzes auch auf den zu prognostizierenden Angewnd.
+
+```{r,}
+df_Dont_use[df_Dont_use==""] = NA #Leerstrings mit NA ersetzen
+df_Dont_use$marital = factor(df_Dont_use$marital) #entfernen des leeren levels
+df_Dont_use$housing = factor(df_Dont_use$housing) #entfernen des leeren levels
+
+df_Dont_use$age = as.integer(df_Dont_use$age) #Umformatierung in Numeric
+df_Dont_use$age = abs(df_Dont_use$age) #Negatives Alter kann nicht existieren
+
+df_Dont_use$balance = as.integer(df_Dont_use$balance) #Umformatierung in Numeric
+df_Dont_use$balance = abs(df_Dont_use$balance) #Negatives verfügbares einkommen ist unrealistisch
+
+df_Dont_use$campaign = as.integer(df_Dont_use$campaign) #Umformatierung in Numeric
+df_Dont_use$campaign = abs(df_Dont_use$campaign) #Man keinen einen Kunden nicht negativ oft kontaktieren.
+
+df_Dont_use$pdays = as.numeric(df_Dont_use$pdays) #Umformatierung in Numeric
+
+df_Dont_use$previous = as.integer(df_Dont_use$previous) #Umformatierung in Numeric
+df_Dont_use$previous = abs(df_Dont_use$previous) #Man keinen einen Kunden nicht negativ oft kontaktieren.
+
+df_Dont_use$day = as.factor(df_Dont_use$day) #Ein Monat kann nur bis zu 31 Tage haben, demzufolge ist ein Factor am Sinnfollsten.
+
+df_Dont_use$y = factor(df_Dont_use$y, levels = c("yes","no"))
+
+#---------------------------
+
+df_Dont_use$job[df_Dont_use$job=="unknown"] = NA #Alle unknown NA setzen
+df_Dont_use$job = factor(df_Dont_use$job) #Leeres level entfernen
+
+#------------------------------
+
+df_Dont_use$education[df_Dont_use$education=="unknown"] = NA
+df_Dont_use$education = factor(df_Dont_use$education)
+
+#------------------------------
+
+df_Dont_use$contact[df_Dont_use$contact=="unknown"] = NA
+df_Dont_use$contact = factor(df_Dont_use$contact)
+
+#---------------------------------
+
+df_Dont_use$day[df_Dont_use$day==32] = 1 
+df_Dont_use$day = factor(df_Dont_use$day)
+
+#--------------------------------------------
+
+df_Dont_use$pdays[df_Dont_use$pdays==-1] = "Never Contacted"
+df_Dont_use$pdays[df_Dont_use$pdays<33] = "previosly"
+df_Dont_use$pdays[df_Dont_use$pdays<39] = "relatively long"
+df_Dont_use$pdays[df_Dont_use$pdays<48] = "long ago"
+df_Dont_use$pdays[df_Dont_use$pdays<=99] = "very long ago"
+df_Dont_use$pdays = as.factor(df_Dont_use$pdays)
+
+#---------------------------------------------
+
+df_Dont_use$poutcome = as.character(df_Dont_use$poutcome)
+df_Dont_use$poutcome[df_Dont_use$poutcome=="unknown"] = "No Campain"
+df_Dont_use$poutcome[df_Dont_use$poutcome=="other"] = NA
+df_Dont_use$poutcome = as.factor(df_Dont_use$poutcome)
+
+#---------------------------------------------
+summary(df_Dont_use)
+
+
+
+
+
+
+```
+
+```{r,}
+set.seed(12345)
+InterationCounter = 1
+Test = mice(df_Dont_use[,-16],meth = "rf", m=InterationCounter)
+
+df_Dont_use = cbind(complete(Test,1),"y" = df_Dont_use$y)
+
+
+```
+
+### Anwendung des RandomForest Modells
+
+Da das RandomForest Model bessere Ergebnisse als die Logistische Regression für mich aufgewiesen hat, werde ich dieses im folgenden auf die zu prognostizierenden Daten Anwenden.
+
+```{r,}
+RF_Predict = predict(RF_Caret_Final, df_Dont_use, type = "prob")
+threshold <- Full_Frame_RF$prob_threshold
+pred_RF      <- factor( ifelse(RF_Predict["yes"] > threshold, "yes", "no") )
+
+```
+
+```{r,}
+Final_DF_Result = pred_RF
+
+ID_Column = read.csv("C:/Users/Alexander/OneDrive - hochschule-trier.de/uni/4. Semester/KIDM/Projekt/Marketing/marketing_dataset_to_predict.csv",sep="§",dec=",",fileEncoding = "UTF-8")[1]
+
+write.csv(cbind(ID_Column,pred_RF),"C:/Users/Alexander/OneDrive - hochschule-trier.de/uni/4. Semester/KIDM/Projekt/Marketing/Prediction RandomForest Alexander Hilberer.csv", row.names=FALSE) # nur ID und prediction.
+
+```
+
